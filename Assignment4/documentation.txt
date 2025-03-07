@@ -1,0 +1,219 @@
+# Comprehensive Analysis of KTP Socket Data Structures
+
+## 1. Window Data Structure
+
+### Purpose
+The window data structure is a critical component for implementing sliding window protocol in network communication, crucial for managing message transmission and acknowledgment.
+
+### Key Components
+1. size: 
+   - Represents the current size of the transmission window
+   - Limits the number of unacknowledged messages in transit
+
+2. start_seq:
+   - Tracks the starting sequence number of the current window
+   - Enables precise tracking of message transmission and acknowledgment status
+   - Facilitates efficient retransmission and flow control
+
+3. wndw[256]:
+   - Dual-purpose array for both send and receive windows
+   - Send Window Representation:
+      -1: Message not sent or already acknowledged
+      i: Message sent but not yet acknowledged, referenced by index in send buffer
+   - Receive Window Representation:
+      -1: Message not expected
+      i: Expected message, referenced by index in receive buffer
+
+## 2. SM_entry (Socket Management Entry) Data Structure
+
+### Detailed Components
+
+#### Connection Identification
+1. is_free: 
+   - Boolean flag indicating socket availability
+   - Enables dynamic socket allocation and management
+
+2. pid:
+   - Process ID associated with the socket
+   - Facilitates process-level socket tracking and management
+
+3. sid:
+   - Mapping between KTP (KGP Transport Protocol) socket and underlying UDP socket
+   - Enables abstraction and flexible socket implementation
+
+#### Address Configuration
+4. self_ip_address[16]:
+   - Local endpoint's IP address
+   - Supports multi-homed systems with multiple network interfaces
+
+5. self_port:
+   - Local endpoint's port number
+   - Enables unique socket identification
+
+6. ip_address[16]:
+   - Remote endpoint's IP address
+   - Supports connection establishment and routing
+
+7. port:
+   - Remote endpoint's port number
+   - Completes remote socket identification
+
+#### Buffering Mechanisms
+8. Send Buffer (sb[10][512]):
+   - Fixed-size buffer for outgoing messages
+   - Supports up to 10 messages
+   - Each message can be up to 512 bytes
+   - Enables message queuing and potential retransmission
+
+9. Send Buffer Size (sb_sz):
+   - Tracks current send buffer utilization
+   - Prevents buffer overflow
+
+10. Send Buffer Lengths (lens[10]):
+    - Stores length of each message in send buffer
+    - Facilitates precise message transmission
+
+11. Receive Buffer (rb[10][512]):
+    - Fixed-size buffer for incoming messages
+    - Mirror design of send buffer
+    - Supports out-of-order message handling
+
+12. Receive Buffer Pointer (rb_pointer):
+    - Tracks next read location in receive buffer
+    - Enables efficient buffer management for application reading
+
+13. Receive Buffer Validation (rb_valid[10]):
+    - Tracks message validity in receive buffer
+    - Supports selective acknowledgment
+
+14. Receive Buffer Lengths (lenr[10]):
+    - Stores length of each message in receive buffer
+    - Supports variable-length message handling
+
+#### Window Management
+15. Send Window (swnd):
+    - Manages outgoing message transmission window
+    - Implements sliding window protocol for send operations
+
+16. Receive Window (rwnd):
+    - Manages incoming message reception window
+    - Supports out-of-order message handling
+
+#### Additional Management Flags
+17. nospace:
+    - Indicates receive buffer fullness
+    - Prevents buffer overflow
+
+18. do_bind:
+    - Socket binding state flag
+    - Ensures one-time binding operation
+
+19. do_crt:
+    - UDP socket creation state flag
+    - Ensures one-time socket creation
+
+20. err_no:
+    - Store the Error Number
+
+21. lastSendTime[256]:
+    - Tracks last transmission time for each sequence number
+    - Enables timeout and retransmission mechanisms
+
+_____________________________________________________________________________________________________________
+
+# Custom Socket Implementation (KTP - KGP Transport Protocol)
+
+## Architectural Components
+
+### 1. Shared Memory Management
+The implementation uses shared memory to facilitate inter-process communication, allowing multiple processes to interact with socket resources efficiently.
+
+### 2. Thread Structure
+The system employs three primary threads:
+- Receiver Thread (R): Handles incoming message processing
+- Sender Thread (S): Manages packet transmission and retransmission
+- Garbage Collection Thread (G): Cleans up inactive socket resources
+
+## Detailed Function Breakdown
+
+### Socket Creation: k_socket()
+#### Purpose
+- Creates a new socket with KTP (Kernel Transport Protocol) type
+- Allocates resources in shared memory
+
+#### Key Operations
+- Validates socket type
+- Finds an available shared memory entry
+- Initializes send and receive windows
+- Sets up initial socket parameters
+
+### Data Transmission: k_sendto()
+#### Purpose
+- Sends data through a socket with robust error handling
+
+#### Key Features
+- Validates socket and destination
+- Checks send buffer availability
+- Manages packet sequencing
+- Prepares data for transmission
+
+### Data Reception: k_recvfrom()
+#### Purpose
+- Receives data from a socket with comprehensive management
+
+#### Key Operations
+- Validates socket status
+- Manages receive buffer
+- Handles packet reordering
+- Updates receive window
+
+### Binding: k_bind()
+#### Purpose
+- Associates a socket with local and remote network addresses
+
+#### Key Actions
+- Stores local IP and port
+- Sets remote communication parameters
+- Performs socket binding
+
+### Socket Closure: k_close()
+#### Purpose
+- Releases socket resources safely
+
+#### Operation
+- Marks socket entry as free in shared memory
+- Releases associated resources
+
+### Packet Loss Simulation: dropMessage()
+#### Purpose
+- Simulates network conditions by probabilistically dropping packets
+
+_____________________________________________________________________________________________________________
+
+
+My Results are given in below Table : Transmited File Size (100.9kB) 
+    +-------------+-------------+-------------+-------------+
+    |      p      |  Number of  |  Number of  |Avg Number of|
+    |(Probability)|   Packets   |Transmissions|Transmissions| 
+    +-------------+-------------+-------------+-------------+
+    |     0.05    |     198     |     230     |     1.16    |
+    +-------------+-------------+-------------+-------------+
+    |     0.10    |     198     |     251     |     1.27    |
+    +-------------+-------------+-------------+-------------+
+    |     0.15    |     198     |     284     |     1.43    |
+    +-------------+-------------+-------------+-------------+
+    |     0.20    |     198     |     311     |     1.57    |
+    +-------------+-------------+-------------+-------------+
+    |     0.25    |     198     |     347     |     1.75    |
+    +-------------+-------------+-------------+-------------+
+    |     0.30    |     198     |     386     |     1.94    |
+    +-------------+-------------+-------------+-------------+
+    |     0.35    |     198     |     431     |     2.17    |
+    +-------------+-------------+-------------+-------------+
+    |     0.40    |     198     |     493     |     2.49    |
+    +-------------+-------------+-------------+-------------+
+    |     0.45    |     198     |     536     |     2.71    |
+    +-------------+-------------+-------------+-------------+
+    |     0.50    |     198     |     594     |     3.00    |
+    +-------------+-------------+-------------+-------------+
+

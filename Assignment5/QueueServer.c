@@ -1,7 +1,7 @@
 //==============================
 // Assignment 5 Submission
-// Name: <Your_Name>
-// Roll number: <Your_Roll_Number>
+// Name: Golla Meghanandh Manvith Prabhash
+// Roll number: 22CS30027
 //==============================
 // Task Queue Server (Non-blocking I/O with fcntl and O_NONBLOCK)
 
@@ -13,217 +13,471 @@
 #include <fcntl.h>
 #include <sys/types.h>
 #include <sys/socket.h>
-#include <signal.h>
+#include <sys/wait.h>
 #include <sys/shm.h>
 #include <sys/sem.h>
+#include <signal.h>
 #include <semaphore.h>
 
 
 #define PORT 8080
 #define MAX_TASKS 50
-#define BUFFER_SIZE 64
+#define BUFFER_SIZE 128
 
 struct sembuf pop, vop;
 
 #define P(s) semop(s, &pop, 1) 
 #define V(s) semop(s, &vop, 1) 
 
+// Task status codes - better terminology
+#define TASK_PENDING 0    // Task is available for processing (initial or re-enqueued)
+#define TASK_ASSIGNED 1   // Task is assigned to a client but not yet completed
+#define TASK_COMPLETED 2  // Task has been successfully completed
 
+// Queue node structure
+typedef struct QueueNode 
+{
+    char task[BUFFER_SIZE];
+    int status;  // 0: pending, 1: assigned, 2: completed
+    int id;      // Unique task ID
+    int attempt_count; // Number of times this task has been assigned
+} QueueNode;
+
+// Queue structure for shared memory
 typedef struct 
 {
-    char tasks[MAX_TASKS][BUFFER_SIZE];
-    int done[MAX_TASKS];
-    // 0 -> Loaded ;
-    // 1 -> Given to a Child but no response Till Now;
-    // 2 -> Evaluated
-    int task_count;
-    int task_index;
-    int Completed;
-} MemType;
+    QueueNode tasks[MAX_TASKS];
+    int front;
+    int rear;
+    int size;
+    int next_id;
+    int all_tasks_processed;
+} TaskQueue;
 
-int shmid,Sem;
-MemType* Mem;
+int shmid, Sem;
+TaskQueue* queue;
+
+// Queue operations
+void init_queue() 
+{
+    P(Sem);
+    queue->front = 0;
+    queue->rear = -1;
+    queue->size = 0;
+    queue->next_id = 0;
+    queue->all_tasks_processed = 0;
+    V(Sem);
+}
+
+int is_queue_empty() 
+{
+    P(Sem);
+    int p = queue->size;
+    V(Sem);
+    return p == 0;
+}
+
+int is_queue_full() 
+{
+    P(Sem);
+    int p = queue->size;
+    V(Sem);
+    return p == MAX_TASKS;
+}
+
+void enqueue(const char* task) 
+{
+    if (is_queue_full()) 
+    {
+        printf("Queue is full, cannot add more tasks\n");
+        return;
+    }
+    
+    P(Sem);
+    queue->rear = (queue->rear + 1) % MAX_TASKS;
+    strncpy(queue->tasks[queue->rear].task, task, BUFFER_SIZE - 1);
+    queue->tasks[queue->rear].task[BUFFER_SIZE - 1] = '\0';
+    queue->tasks[queue->rear].status = TASK_PENDING;
+    queue->tasks[queue->rear].id = queue->next_id++;
+    queue->tasks[queue->rear].attempt_count = 0;
+    queue->size++;
+    V(Sem);
+}
+
+int dequeue_task(char* task_buffer, int* task_id) 
+{
+    if (is_queue_empty()) return -1;
+    
+    P(Sem);
+    // Find first pending task
+    int current = queue->front;
+    int found = 0;
+    int count = 0;
+    
+    while (count < queue->size && !found) 
+    {
+        if (queue->tasks[current].status == TASK_PENDING) 
+        {
+            strncpy(task_buffer, queue->tasks[current].task, BUFFER_SIZE);
+            *task_id = queue->tasks[current].id;
+            queue->tasks[current].status = TASK_ASSIGNED;
+            queue->tasks[current].attempt_count++;
+            found = 1;
+            
+            printf("Assigned task ID %d (attempt #%d): %s\n", *task_id, queue->tasks[current].attempt_count,queue->tasks[current].task);
+        }
+        current = (current + 1) % MAX_TASKS;
+        count++;
+    }
+    
+    // Check if all tasks are assigned or completed
+    int all_processed = 1;
+    current = queue->front;
+    count = 0;
+    
+    while (count < queue->size) 
+    {
+        if (queue->tasks[current].status == TASK_PENDING) 
+        {
+            all_processed = 0;
+            break;
+        }
+        current = (current + 1) % MAX_TASKS;
+        count++;
+    }
+    
+    queue->all_tasks_processed = all_processed;
+    V(Sem);
+    
+    return found ? 0 : -1;
+}
+
+void update_task_result(int task_id, const char* result) 
+{
+    P(Sem);
+    int current = queue->front;
+    int count = 0;
+    
+    while (count < queue->size) 
+    {
+        if (queue->tasks[current].id == task_id) 
+        {
+            char new_result[BUFFER_SIZE*2];
+            snprintf(new_result, BUFFER_SIZE*2, "%s = %s", queue->tasks[current].task, result);
+            strncpy(queue->tasks[current].task, new_result, BUFFER_SIZE - 1);
+            queue->tasks[current].task[BUFFER_SIZE - 1] = '\0';
+            queue->tasks[current].status = TASK_COMPLETED;
+            printf("Task ID %d completed after %d attempts\n", 
+                   task_id, 
+                   queue->tasks[current].attempt_count);
+            break;
+        }
+        current = (current + 1) % MAX_TASKS;
+        count++;
+    }
+    V(Sem);
+}
+
+void requeue_task(int task_id) 
+{
+    P(Sem);
+    int current = queue->front;
+    int count = 0;
+    
+    while (count < queue->size) 
+    {
+        if (queue->tasks[current].id == task_id) 
+        {
+            queue->tasks[current].status = TASK_PENDING;
+            queue->all_tasks_processed = 0;
+            printf("Re-enqueueing task ID %d: %s (attempt #%d failed)\n", 
+                   task_id, 
+                   queue->tasks[current].task,
+                   queue->tasks[current].attempt_count);
+            break;
+        }
+        current = (current + 1) % MAX_TASKS;
+        count++;
+    }
+    V(Sem);
+}
 
 void load_tasks(const char *filename) 
 {
-    FILE *file = fopen(filename, "r");
-    P(Sem);
-    if (!file) 
+    int fd = open(filename, O_RDONLY);
+    if (fd == -1) 
     {
         perror("Error opening task file");
-        V(Sem);
         exit(EXIT_FAILURE);
     }
-    while (fgets(Mem->tasks[Mem->task_count], BUFFER_SIZE, file) && Mem->task_count < MAX_TASKS) 
+    
+    init_queue();
+    
+    char buffer[BUFFER_SIZE];
+    ssize_t bytes_read;
+    while ((bytes_read = read(fd, buffer, sizeof(buffer) - 1)) > 0) 
     {
-        Mem->tasks[Mem->task_count][strcspn(Mem->tasks[Mem->task_count], "\n")] = 0; 
-        Mem->done[Mem->task_count] = 0;
-        Mem->task_count=Mem->task_count+1;
+        buffer[bytes_read] = '\0';
+        char *token = strtok(buffer, "\n");
+        while (token && !is_queue_full()) 
+        {
+            enqueue(token);
+            token = strtok(NULL, "\n");
+        }
     }
-    Mem->Completed = 0;
+    
+    close(fd);
+}
+
+void write_results(const char *filename) 
+{
+    int fd = open(filename, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+    if (fd == -1) 
+    {
+        perror("Error opening task file for writing");
+        exit(EXIT_FAILURE);
+    }
+    
+    P(Sem);
+    int current = queue->front;
+    int count = 0;
+    
+    while (count < queue->size) 
+    {
+        char task_line[BUFFER_SIZE + 10];
+        snprintf(task_line, sizeof(task_line), "%s\n", queue->tasks[current].task);
+        write(fd, task_line, strlen(task_line));
+        current = (current + 1) % MAX_TASKS;
+        count++;
+    }
     V(Sem);
-    fclose(file);
+    
+    close(fd);
 }
 
 void sigchld_handler(int signo) 
 {
     (void)signo; 
-    // while (waitpid(-1, NULL, WNOHANG) > 0);
+    while (waitpid(-1, NULL, WNOHANG) > 0);
 }
 
 void handle_client(int client_fd) 
 {
     char buffer[BUFFER_SIZE];
-    while(1)
+    int task_id = -1;
+    char task_content[BUFFER_SIZE];
+    
+    while(1) 
     {
-        for(int i=0;i<BUFFER_SIZE;i++) buffer[i]='\0';
-        int p = 5;
-        int index = -1;
-        while(p--)
+        memset(buffer, 0, BUFFER_SIZE);
+        int timeout_counter = 5;
+        int result=-1;
+        int got_response = 0;
+        
+        // Wait for GET_TASK request
+        while(timeout_counter-- > 0 && !got_response) 
         {
-            read(client_fd, buffer, BUFFER_SIZE);
-            // printf("Recived %s\n",buffer);
-            if (strcmp(buffer, "GET_TASK") == 0) 
+            if (read(client_fd, buffer, BUFFER_SIZE) > 0) 
             {
-                P(Sem);
-                if (Mem->Completed==0 && Mem->done[Mem->task_index]==0) 
+                got_response = 1;
+                break;
+            }
+            sleep(1);
+        }
+        
+        if (!got_response) 
+        {
+            printf("Client timed out waiting for request\n");
+            if (task_id >= 0) 
+            {
+                requeue_task(task_id);  // Re-enqueue the previously assigned task
+                task_id = -1;
+            }
+            close(client_fd);
+            exit(EXIT_FAILURE);
+        }
+        
+        if (strcmp(buffer, "GET_TASK") == 0) 
+        {
+            // If there was a previous task that didn't get a result, re-enqueue it first
+            if (task_id >= 0) 
+            {
+                requeue_task(task_id);
+                task_id = -1;
+            }
+            
+            // Get a new task
+            memset(task_content, 0, BUFFER_SIZE);
+            result = dequeue_task(task_content, &task_id);
+            
+            if (result == 0) 
+            {
+                char task_response[BUFFER_SIZE + 6];
+                snprintf(task_response, BUFFER_SIZE + 6, "Task: %s", task_content);
+                write(client_fd, task_response, strlen(task_response));
+            } 
+            else 
+            {
+                write(client_fd, "No tasks available", 18);
+                task_id = -1;
+            }
+        } 
+        else if (strncmp(buffer, "exit", 4) == 0) 
+        {
+            printf("Received \"EXIT\"\nClient disconnected.\n");
+            // Re-enqueue any task that was assigned but not completed
+            if (task_id >= 0) requeue_task(task_id);
+            close(client_fd);
+            exit(EXIT_SUCCESS);
+        } 
+        else continue;
+        
+        // If no task was assigned, continue to next iteration
+        if (task_id < 0) continue;
+        
+        // Wait for RESULT response
+        timeout_counter = 5;
+        got_response = 0;
+        
+        while(timeout_counter-- > 0 && !got_response) 
+        {
+            sleep(1);
+            memset(buffer, 0, BUFFER_SIZE);
+            
+            if (read(client_fd, buffer, BUFFER_SIZE) > 0) 
+            {
+                // printf("Buffer : %s\n",buffer);
+                got_response = 1;
+                if (strncmp(buffer, "RESULT", 6) == 0) 
                 {
-                    char task_response[BUFFER_SIZE+6];
-                    printf("Sending task : %s\n",Mem->tasks[Mem->task_index]);
-                    snprintf(task_response, BUFFER_SIZE+6, "Task: %s", Mem->tasks[Mem->task_index]);
-                    int present = Mem->task_index,i;
-                    Mem->done[present]=1;
-                    index  = present;
-                    for(i=0;i < Mem->task_count;i++)
+                    if (task_id >= 0) 
                     {
-                        if(Mem->done[present]) present = (present+1)%Mem->task_count;
-                        else break;
+                        update_task_result(task_id, buffer + 7);
+                        write_results("tasks.txt");
+                        task_id = -1; // Clear the task ID after processing
                     }
-                    if(i==Mem->task_count) 
-                    { 
-                        printf("END of all Elements In The Queue\n");
-                        Mem->Completed=1;
-                    }
+                } 
+                else if (strncmp(buffer, "exit", 4) == 0) 
+                {
+                    printf("Received \"EXIT\"\nClient disconnected.\n");
+                    // Re-enqueue any task that was assigned but not completed
+                    if (task_id >= 0) requeue_task(task_id);
+                    close(client_fd);
+                    exit(EXIT_SUCCESS);
+                } 
+                else if (strcmp(buffer, "GET_TASK") == 0) 
+                {
+                    if (result == 0) 
+                    {
+                        char task_response[BUFFER_SIZE + 6];
+                        snprintf(task_response, BUFFER_SIZE + 6, "Task: %s", task_content);
+                        printf("Send Again : %s\n",task_response);
+                        write(client_fd, task_response, strlen(task_response));
+                    } 
                     else 
                     {
-                        Mem->task_index = present;
+                        write(client_fd, "No tasks available", 18);
+                        task_id = -1;
                     }
-                    write(client_fd, task_response, strlen(task_response));
-                } 
+                    timeout_counter = 5;
+                    got_response = 0;
+                    continue;
+                }
                 else 
                 {
-                    write(client_fd, "No tasks available", 18);
+                    // Invalid response, re-enqueue the task
+                    if (task_id >= 0) 
+                    {
+                        requeue_task(task_id);
+                        task_id = -1;
+                    }
                 }
-                V(Sem);
-                break;
-            } 
-            else if (strncmp(buffer, "exit",4) == 0) 
-            {
-
-                printf("Recived \"EXIT\"\nClient disconnected.\n");
-                close(client_fd);
-                exit(EXIT_SUCCESS);
             }
-            sleep(1);
         }
-        if(p==-1)
-        {
-            printf("Client disconnected Since No message in 5 Sec\n");
-            close(client_fd);
-            exit(EXIT_FAILURE);
-        }
-
-        p = 5;
         
-        while(p--)
+        if (!got_response) 
         {
-            sleep(1);
-            read(client_fd, buffer, BUFFER_SIZE);
-            if (strncmp(buffer, "RESULT", 6) == 0) 
-            {
-                printf("Received : %s\n", buffer);
-                printf("M[%d] : %s\n",index,buffer+7);
-                break;
-            } 
-            else if (strncmp(buffer, "exit",4) == 0) 
-            {
-
-                printf("Recived \"EXIT\"\nClient disconnected.\n");
-                close(client_fd);
-                exit(EXIT_SUCCESS);
+            printf("Client timed out waiting for result\n");
+            if (task_id >= 0) {
+                printf("Re-enqueueing task due to no result received\n");
+                requeue_task(task_id);
+                task_id = -1;
             }
-        }
-        if(p==-1)
-        {
-            P(Sem);
-            Mem->Completed=0;
-            Mem->done[index]=0;
-            V(Sem);
-            printf("Client disconnected Since No message in 5 Sec\n");
             close(client_fd);
             exit(EXIT_FAILURE);
         }
-    } 
+        
+        
+    }
 }
 
 // ------- HANDLE CTRL+C REMOVE THE SM AND SEMOPHERS ------- //
+
+// Global flag to track if cleanup has been done
+volatile sig_atomic_t cleanup_done = 0;
+
 void sigHandler(int sig) 
 {
-    shmdt(Mem);
-    shmctl(shmid, IPC_RMID, NULL);
-    semctl(Sem, 0, IPC_RMID);
-    printf("\n-------Successfully Removed the Shared Memory-------\n");
+    // Only perform cleanup once
+    if (!cleanup_done) 
+    {
+        cleanup_done = 1;
+        
+        shmdt(queue);
+        shmctl(shmid, IPC_RMID, NULL);
+        semctl(Sem, 0, IPC_RMID);
+        printf("\n-------Successfully Removed the Shared Memory-------\n");
+    }
     exit(EXIT_SUCCESS);
 }
 
 int main() 
 {
-
-    shmid = shmget(ftok("/",'P'),sizeof(MemType),0777|IPC_CREAT|IPC_EXCL);
-    Mem = (MemType*) shmat(shmid,NULL,0);
-    Sem = semget(ftok("/",'Q'), 1, 0777|IPC_CREAT);
-
+    shmid = shmget(ftok("/", 'P'), sizeof(TaskQueue), 0777 | IPC_CREAT | IPC_EXCL);
+    queue = (TaskQueue*) shmat(shmid, NULL, 0);
+    Sem = semget(ftok("/", 'Q'), 1, 0777 | IPC_CREAT);
+    
     pop.sem_num = 0;
     vop.sem_num = 0;
-	pop.sem_flg = 0;
+    pop.sem_flg = 0;
     vop.sem_flg = 0;
-	pop.sem_op = -1;
-    vop.sem_op  = 1;
-
+    pop.sem_op = -1;
+    vop.sem_op = 1;
+    
     semctl(Sem, 0, SETVAL, 1);
-
+    
     int server_fd, client_fd;
     struct sockaddr_in server_addr, client_addr;
     socklen_t addr_len = sizeof(client_addr);
-
+    
     signal(SIGCHLD, sigchld_handler);
     signal(SIGINT, sigHandler);
-
+    
     server_fd = socket(AF_INET, SOCK_STREAM, 0);
     if (server_fd < 0) 
     {
         perror("Socket creation failed");
         exit(EXIT_FAILURE);
     }
-
+    
     memset(&server_addr, 0, sizeof(server_addr));
     server_addr.sin_family = AF_INET;
     server_addr.sin_addr.s_addr = INADDR_ANY;
     server_addr.sin_port = htons(PORT);
-
+    
     bind(server_fd, (struct sockaddr *)&server_addr, sizeof(server_addr));
     listen(server_fd, 5);
-
+    
     printf("Server listening on port %d...\n", PORT);
-
+    
     load_tasks("tasks.txt");
-
+    
     while (1) 
     {
         client_fd = accept(server_fd, (struct sockaddr *)&client_addr, &addr_len);
         if (client_fd < 0) continue;
         fcntl(client_fd, F_SETFL, O_NONBLOCK);
-
+        
         if (fork() == 0) 
         {
             close(server_fd);
@@ -231,7 +485,7 @@ int main()
         }
         close(client_fd);
     }
-
+    
     close(server_fd);
     return 0;
 }

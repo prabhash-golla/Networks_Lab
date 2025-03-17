@@ -23,11 +23,14 @@
 #define PORT 8080
 #define MAX_TASKS 50
 #define BUFFER_SIZE 128
+#define MAX_GET_TASK 4
 
 struct sembuf pop, vop;
 
 #define P(s) semop(s, &pop, 1) 
 #define V(s) semop(s, &vop, 1) 
+
+char *filename;
 
 // Task status codes - better terminology
 #define TASK_PENDING 0    // Task is available for processing (initial or re-enqueued)
@@ -263,19 +266,22 @@ void sigchld_handler(int signo)
 
 void handle_client(int client_fd) 
 {
+    signal(SIGINT, SIG_DFL);
     char buffer[BUFFER_SIZE];
     int task_id = -1;
     char task_content[BUFFER_SIZE];
+    int num_get_task = 0;
     
     while(1) 
     {
+        num_get_task = 0;
         memset(buffer, 0, BUFFER_SIZE);
         int timeout_counter = 5;
         int result=-1;
         int got_response = 0;
         
         // Wait for GET_TASK request
-        while(timeout_counter-- > 0 && !got_response) 
+        while(timeout_counter-- > 0) 
         {
             if (read(client_fd, buffer, BUFFER_SIZE) > 0) 
             {
@@ -305,7 +311,7 @@ void handle_client(int client_fd)
                 requeue_task(task_id);
                 task_id = -1;
             }
-            
+            num_get_task++;
             // Get a new task
             memset(task_content, 0, BUFFER_SIZE);
             result = dequeue_task(task_content, &task_id);
@@ -367,21 +373,25 @@ void handle_client(int client_fd)
                 } 
                 else if (strcmp(buffer, "GET_TASK") == 0) 
                 {
-                    if (result == 0) 
+                    if(num_get_task!=MAX_GET_TASK) 
                     {
-                        char task_response[BUFFER_SIZE + 6];
-                        snprintf(task_response, BUFFER_SIZE + 6, "Task: %s", task_content);
-                        printf("Send Again : %s\n",task_response);
-                        write(client_fd, task_response, strlen(task_response));
-                    } 
-                    else 
-                    {
-                        write(client_fd, "No tasks available", 18);
-                        task_id = -1;
+                        num_get_task++;
+                        if (result == 0) 
+                        {
+                            char task_response[BUFFER_SIZE + 6];
+                            snprintf(task_response, BUFFER_SIZE + 6, "Task: %s", task_content);
+                            printf("Send Again : %s\n",task_response);
+                            write(client_fd, task_response, strlen(task_response));
+                        } 
+                        else 
+                        {
+                            write(client_fd, "No tasks available", 18);
+                            task_id = -1;
+                        }
+                        timeout_counter = 5;
+                        got_response = 0;
+                        continue;
                     }
-                    timeout_counter = 5;
-                    got_response = 0;
-                    continue;
                 }
                 else 
                 {
@@ -431,12 +441,28 @@ void sigHandler(int sig)
     exit(EXIT_SUCCESS);
 }
 
-int main() 
+int main(int argc, char* argv[]) 
 {
-    shmid = shmget(ftok("/", 'P'), sizeof(TaskQueue), 0777 | IPC_CREAT | IPC_EXCL);
-    queue = (TaskQueue*) shmat(shmid, NULL, 0);
-    Sem = semget(ftok("/", 'Q'), 1, 0777 | IPC_CREAT);
+    if (argc < 2)
+    {
+        printf("Missing File Name. Usage: %s <file_name>\n", argv[0]);
+        exit(EXIT_FAILURE); 
+    }
+    else
+    {
+        filename = argv[1];
+    }
+
+    shmid = shmget(IPC_PRIVATE, sizeof(TaskQueue), 0777 | IPC_CREAT | IPC_EXCL);
+    Sem = semget(IPC_PRIVATE, 1, 0777 | IPC_CREAT);
     
+    if(shmid==-1 || Sem == -1)
+    {
+        printf("Shared Mem / Sem Creation Error\n");
+        exit(EXIT_FAILURE);
+    }
+    
+    queue = (TaskQueue*) shmat(shmid, NULL, 0);
     pop.sem_num = 0;
     vop.sem_num = 0;
     pop.sem_flg = 0;
@@ -465,12 +491,18 @@ int main()
     server_addr.sin_addr.s_addr = INADDR_ANY;
     server_addr.sin_port = htons(PORT);
     
-    bind(server_fd, (struct sockaddr *)&server_addr, sizeof(server_addr));
+    int b = bind(server_fd, (struct sockaddr *)&server_addr, sizeof(server_addr));
+    if (b < 0) 
+    {
+        perror("Binding failed");
+        exit(EXIT_FAILURE);
+    }
+
     listen(server_fd, 5);
     
     printf("Server listening on port %d...\n", PORT);
     
-    load_tasks("tasks.txt");
+    load_tasks(filename);
     
     while (1) 
     {

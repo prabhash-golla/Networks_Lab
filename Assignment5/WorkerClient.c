@@ -14,12 +14,8 @@
 
 #define PORT 8080
 #define BUFFER_SIZE 1024
+#define MAX_GET_REQUEST 10
 
-/*
- * Evaluates a mathematical expression string and returns the result
- * @param task String containing a mathematical expression (e.g., "5 + 3")
- * @return Result of the mathematical operation
- */
 int evaluate_task(const char *task) 
 {
     int a, b;
@@ -114,8 +110,26 @@ int main(int argc, char* argv[])
     }
     printf("Connected to server successfully.\n");
     
+    #ifdef NORESPONSE
+    printf("Running Client in Mode Such No GET_TASK SEND\n");
+    sleep(6);
+    exit(EXIT_SUCCESS);
+    #elif defined(RECIVE) 
+    printf("Running Client in Mode Such GET_TASK & NO RESPONSE & Imidiate stoping client\n");
+    #elif defined(WAITRECIVE)
+    printf("Running Client in Mode Such GET_TASK & NO RESPONSE & No imidiate stoping client\n");
+    #elif defined(REPEATED)
+    printf("Running Client in Mode Such Sent Repated GET_TASK's\n");
+    #else
+    printf("Running Client in Normal Mode\n");
+    #endif
+
     // Process tasks
     int tasks_completed = 0;
+
+    #ifdef REPEATED
+    int num_get_task = 0;
+    #endif
     
     while (tasks_completed < tasks_to_process) 
     {
@@ -125,6 +139,7 @@ int main(int argc, char* argv[])
         // Request a task
         print_terminal_line('_');
         printf("\nRequesting task from server...\n");
+
         if (write(client_fd, "GET_TASK", 8) < 0) 
         {
             perror("Failed to send GET_TASK");
@@ -149,7 +164,19 @@ int main(int argc, char* argv[])
         if (strncmp(buffer, "Task:", 5) == 0) 
         {
             printf("Received task: %s\n", buffer + 5);
-            
+
+            #ifdef RECIVE 
+            printf("Tasks completed: %d/%d\n", tasks_completed, tasks_to_process);
+            exit(EXIT_SUCCESS);
+            #elif defined(WAITRECIVE)
+            printf("Tasks completed: %d/%d\n", tasks_completed, tasks_to_process);
+            sleep(6);
+            exit(EXIT_SUCCESS);
+            #elif defined(REPEATED)
+            num_get_task++;
+            if(num_get_task!=MAX_GET_REQUEST) continue;
+            else exit(EXIT_SUCCESS);
+            #else
             // Evaluate the mathematical expression
             int result = evaluate_task(buffer + 6);
             printf("Calculated result: %d\n", result);
@@ -164,7 +191,10 @@ int main(int argc, char* argv[])
                 perror("Failed to send result");
                 break;
             }
-            
+            #endif
+
+
+
             tasks_completed++;
             printf("Tasks completed: %d/%d\n", tasks_completed, tasks_to_process);
         }

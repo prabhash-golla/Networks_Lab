@@ -164,6 +164,7 @@ int main(int argc,char* argv[])
         // Fork a child process to handle the client
         if (fork() == 0) 
         {
+            close(server_fd);
             signal(SIGINT,SIG_DFL);  // Reset SIGINT handler for child process
             P(PrintSem);  // Lock print semaphore
             printf("Client connected : %s\n",inet_ntoa(client_addr.sin_addr)); 
@@ -186,11 +187,23 @@ int main(int argc,char* argv[])
             {
                 recbuf[reclen]='\0';  // Null-terminate received data
                 
+                // Process QUIT command
+                if(!(strncmp(recbuf,"QUIT",4)) && reclen==4)
+                {
+                    rechel = 1;
+                    send(client_fd,"200 Goodbye\n",12,0);
+
+                    P(PrintSem);  // Lock print semaphore
+                    printf("client disconnected\n");
+                    V(PrintSem);  // Release print semaphore
+
+                    break;  // Exit client processing loop
+                }
+                 
                 // Check if HELO command was received first
                 if(!rechel && (strncmp(recbuf,"HELO",4)))
                 {
-                    send(client_fd,"403 FORBIDDEN\n",14,0);
-                    send(client_fd, "\n.\n", 3, 0);
+                    send(client_fd,"403 FORBIDDEN\n\n.\n",17,0);
                     continue;
                 }   
                 
@@ -217,18 +230,7 @@ int main(int argc,char* argv[])
                     continue;
                 }
                 
-                // Process QUIT command
-                if(!(strncmp(recbuf,"QUIT",4)))
-                {
-                    rechel = 1;
-                    send(client_fd,"200 Goodbye\n",12,0);
-
-                    P(PrintSem);  // Lock print semaphore
-                    printf("client disconnected\n");
-                    V(PrintSem);  // Release print semaphore
-
-                    break;  // Exit client processing loop
-                }
+               
                 
                 // Process MAIL FROM command
                 if(!(strncmp(recbuf,"MAIL FROM:",10)))
@@ -306,7 +308,7 @@ int main(int argc,char* argv[])
                     recto = 1;  // Mark RCPT TO as received
 
                     P(PrintSem);  // Lock print semaphore
-                    printf("RCPT TO : %s\n",email);
+                    printf("RCPT TO: %s\n",email);
                     V(PrintSem);  // Release print semaphore
 
                     strcpy(recipient_email,email);  // Store recipient email
@@ -315,7 +317,7 @@ int main(int argc,char* argv[])
                 }
                 
                 // Process DATA command
-                if(!(strncmp(recbuf,"DATA",4)))
+                if(!(strncmp(recbuf,"DATA\n",5)))
                 {
                     // Ensure proper command sequence
                     if(!recfrom || !recto) 
@@ -439,15 +441,13 @@ int main(int argc,char* argv[])
                     // Validate email format
                     if (email == NULL )
                     {
-                        send(client_fd,"400 ERR\n",8,0);
-                        send(client_fd, "\n.\n", 3, 0);
+                        send(client_fd,"400 ERR\n\n.\n",11,0);
                         continue;
                     }
 
                     if (strlen(email) < 5 || !strchr(email, '@')) 
                     {
-                        send(client_fd,"401 NOT FOUND\n",14,0);
-                        send(client_fd, "\n.\n", 3, 0);
+                        send(client_fd,"401 NOT FOUND\n\n.\n",17,0);
                         continue;
                     }
 
@@ -457,8 +457,7 @@ int main(int argc,char* argv[])
                     // Verify email domain matches client ID
                     if (email_len < client_id_len || strcmp(email + email_len - client_id_len, client_id) != 0) 
                     {
-                        send(client_fd, "403 FORBIDDEN - ID MISMATCH\n", 29, 0);
-                        send(client_fd, "\n.\n", 3, 0);
+                        send(client_fd, "403 FORBIDDEN - ID MISMATCH\n\n.\n", 32, 0);
                         continue;
                     }
                     
@@ -480,8 +479,7 @@ int main(int argc,char* argv[])
                     fp = fopen(filename, "r");
                     if (fp == NULL) 
                     {
-                        send(client_fd, "401 NOT FOUND\n", 14, 0);
-                        send(client_fd, "\n.\n", 3, 0);
+                        send(client_fd, "401 NOT FOUND\n\n.\n", 17, 0);
                         continue;
                     }
                     
@@ -536,15 +534,15 @@ int main(int argc,char* argv[])
                     // Validate command parameters
                     if (email == NULL || id_str == NULL)
                     {
-                        send(client_fd,"400 ERR\n",8,0);
-                        send(client_fd, "\n.\n", 3, 0);
+                        send(client_fd,"400 ERR\n\n.\n",11,0);
+                        // send(client_fd, "\n.\n", 3, 0);
                         continue;
                     }
 
                     if(strlen(email) < 5 || !strchr(email, '@')) 
                     {
-                        send(client_fd, "401 NOT FOUND\n", 14, 0);
-                        send(client_fd, "\n.\n", 3, 0);
+                        send(client_fd, "401 NOT FOUND\n\n.\n", 17, 0);
+                        // send(client_fd, "\n.\n", 3, 0);
                         continue;
                     }
 
@@ -576,8 +574,8 @@ int main(int argc,char* argv[])
                     fp = fopen(filename, "r");
                     if (fp == NULL) 
                     {
-                        send(client_fd, "401 NOT FOUND\n", 14, 0);
-                        send(client_fd, "\n.\n", 3, 0);
+                        send(client_fd, "401 NOT FOUND\n\n.\n", 17, 0);
+                        // send(client_fd, "\n.\n", 3, 0);
                         continue;
                     }
                     

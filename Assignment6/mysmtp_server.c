@@ -20,6 +20,7 @@
 #include <errno.h>
 
 int server_fd;
+int client_fd;
 #define INIT_BUF_SIZE 4096  // Initial buffer size for dynamic allocation
 struct sembuf pop, vop;     // Semaphore operation structures
 
@@ -65,6 +66,11 @@ void sigHandler(int sig)
     exit(EXIT_SUCCESS);
 }
 
+void sigHandlerFork()
+{
+    close(client_fd);
+}
+
 int main(int argc,char* argv[])
 {
     // Set up signal handlers
@@ -102,7 +108,6 @@ int main(int argc,char* argv[])
     int port = atoi(argv[1]);  // Convert port number from string to integer
 
     // Socket variables
-    int client_fd;
     struct sockaddr_in server_addr, client_addr;
     socklen_t addr_len = sizeof(client_addr);
 
@@ -165,7 +170,7 @@ int main(int argc,char* argv[])
         if (fork() == 0) 
         {
             close(server_fd);
-            signal(SIGINT,SIG_DFL);  // Reset SIGINT handler for child process
+            signal(SIGINT,sigHandlerFork);  // SIGINT handler for child process
             P(PrintSem);  // Lock print semaphore
             printf("Client connected : %s\n",inet_ntoa(client_addr.sin_addr)); 
             V(PrintSem);  // Release print semaphore
@@ -218,6 +223,13 @@ int main(int argc,char* argv[])
                         send(client_fd, "400 ERR\n", 8, 0);
                         continue;
                     }
+
+                    if(!strchr(temp_id, '.'))
+                    {
+                        send(client_fd,"401 NOT FOUND\n",14,0);
+                        continue;
+                    }
+                    
                     strncpy(client_id, temp_id, sizeof(client_id) - 1);  // Store client ID
                     client_id[sizeof(client_id) - 1] = '\0';  // Ensure null-termination
                     
@@ -239,9 +251,10 @@ int main(int argc,char* argv[])
                     char *mail = strtok(recbuf, " ");
                     char *from = strtok(NULL, " ");
                     char *email = strtok(NULL, " ");
+                    char *null = strtok(NULL, " ");
                     
                     // Validate email format
-                    if (email == NULL )
+                    if (email == NULL && null!=NULL)
                     {
                         send(client_fd,"400 ERR\n",8,0);
                         continue;
@@ -281,9 +294,10 @@ int main(int argc,char* argv[])
                     char *rcpt = strtok(recbuf, " ");
                     char *to = strtok(NULL, " ");
                     char *email = strtok(NULL, " ");
+                    char *null = strtok(NULL, " ");
                     
                     // Validate email format
-                    if (email == NULL )
+                    if (email == NULL || null!=NULL )
                     {
                         send(client_fd,"400 ERR\n",8,0);
                         continue;
@@ -317,7 +331,7 @@ int main(int argc,char* argv[])
                 }
                 
                 // Process DATA command
-                if(!(strncmp(recbuf,"DATA\n",5)))
+                if(!(strcmp(recbuf,"DATA")))
                 {
                     // Ensure proper command sequence
                     if(!recfrom || !recto) 
@@ -405,6 +419,7 @@ int main(int argc,char* argv[])
                         perror("Failed to open mailbox file");
                         free(buffer);
                         V(Sem);  // Release semaphore
+                        send(client_fd,"500 SERVER ERROR\n\n.\n",20,0);
                         continue;
                     }
 
@@ -437,9 +452,10 @@ int main(int argc,char* argv[])
                     normalize_email(recbuf + 4);  // Make email case-insensitive
                     char *list = strtok(recbuf, " ");
                     char *email = strtok(NULL, " ");
+                    char *null = strtok(NULL, " ");
 
                     // Validate email format
-                    if (email == NULL )
+                    if (email == NULL || null!=NULL)
                     {
                         send(client_fd,"400 ERR\n\n.\n",11,0);
                         continue;
@@ -530,12 +546,12 @@ int main(int argc,char* argv[])
                     char *get_task = strtok(recbuf, " ");
                     char *email = strtok(NULL, " ");
                     char *id_str = strtok(NULL, " ");
+                    char *null = strtok(NULL, " ");
 
                     // Validate command parameters
-                    if (email == NULL || id_str == NULL)
+                    if (email == NULL || id_str == NULL || null!=NULL )
                     {
                         send(client_fd,"400 ERR\n\n.\n",11,0);
-                        // send(client_fd, "\n.\n", 3, 0);
                         continue;
                     }
 
@@ -575,7 +591,6 @@ int main(int argc,char* argv[])
                     if (fp == NULL) 
                     {
                         send(client_fd, "401 NOT FOUND\n\n.\n", 17, 0);
-                        // send(client_fd, "\n.\n", 3, 0);
                         continue;
                     }
                     

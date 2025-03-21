@@ -96,6 +96,7 @@ int main(int argc, char* argv[])
             // If server reports error, continue to next iteration
             if(strncmp(rec, "500 SERVER ERROR\n",17) == 0) continue;
             if(strncmp(rec, "403 FORBIDDEN\n",14) == 0) continue;
+            if(strncmp(rec, "400 ERR\n",7) == 0) continue;
             
             // Read mail content until '.' on a line by itself
             while(1)

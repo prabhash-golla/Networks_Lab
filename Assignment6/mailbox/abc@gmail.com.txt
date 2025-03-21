@@ -3,3 +3,14 @@ From: bcd@gmail.com
 Date: 20-03-2025
 ~~~ END ~~~
 
+~~~ START ~~~
+From: bcd@gmail.com
+Date: 21-03-2025
+HEllO :
+MY NAME IS ABC
+HOW ARE YOU 
+WHAT IS GOING ON IN LIFE
+PLEASE RESPOND
+BYE.
+~~~ END ~~~
+

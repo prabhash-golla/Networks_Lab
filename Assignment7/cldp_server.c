@@ -161,7 +161,7 @@ int main(int argc, char *argv[])
             {
                 memcpy(query_payload, (char *)((char *)cldp + sizeof(struct cldp_header)), query_payload_len);
                 query_payload[query_payload_len] = '\0';
-                printf("Query payload: %s\n", query_payload);
+                // printf("Query payload: %s\n", query_payload);
             }
             else strcpy(query_payload, "HTS");
             char hostname[256];

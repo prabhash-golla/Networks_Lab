@@ -3,8 +3,8 @@ CLDP Protocol Project
 
 Overview
 --------
-This project implements the Custom Link Discovery Protocol (CLDP) using raw IP sockets on Linux.  
-CLDP is designed to enable hosts on a local network to discover each other and exchange system information.  
+This project implements the Custom Link Discovery Protocol (CLDP) using raw IP sockets on Linux.
+CLDP is designed to enable hosts on a local network to discover each other and exchange system information.
 The protocol supports three message types:
   - **HELLO**: An announcement message sent periodically by servers.
   - **QUERY**: A request message sent by clients to ask for specific system information.
@@ -12,12 +12,12 @@ The protocol supports three message types:
 
 Files Included
 --------------
-1. **cldp_server.c**  
+1. **cldp_server.c**
    - Implements the server side of CLDP.
    - Periodically sends HELLO messages (every 10 seconds) to announce its presence.
    - Listens for QUERY messages and sends a RESPONSE containing system information based on the query payload.
 
-2. **cldp_client.c**  
+2. **cldp_client.c**
    - Implements the client side of CLDP.
    - Listens for HELLO messages to discover available servers.
    - Sends QUERY messages to the discovered servers.
